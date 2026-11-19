@@ -2,48 +2,97 @@ import iconAppointed   from '../assets/icons/appointed.svg'
 import iconChanged     from '../assets/icons/changed.svg'
 import iconAppreciated from '../assets/icons/appreciated.svg'
 
+const appointed = { img: iconAppointed, bg: 'rgba(110,114,200,.12)', label: 'appointed' }
+const changed = { img: iconChanged, bg: 'rgba(59,63,224,.10)', label: 'changed' }
+const cancelled = { img: null, bg: 'rgba(220,38,38,.08)', label: 'cancelled' }
+const grade = { img: iconAppreciated, bg: 'rgba(16,185,129,.10)', label: 'grade' }
+const fallback = { img: null, bg: 'rgba(107,114,128,.10)', label: 'bell' }
+
+function scheduleBody(message, dateLabel, { when, where }) {
+  return [message, when && `${dateLabel}: ${when}.`, where && `Место: ${where}.`]
+    .filter(Boolean).join(' ')
+}
+
+const retakeUpdated = {
+  meta: changed,
+  title: 'Пересдача перенесена',
+  body: details => scheduleBody('Детали пересдачи изменены.', 'Новое время', details),
+}
+const retakeCancelled = {
+  meta: cancelled,
+  title: 'Пересдача отменена',
+  body: ({ reason }) => reason
+    ? `Пересдача отменена деканатом. Причина: ${reason}.`
+    : 'Пересдача была отменена деканатом.',
+}
+
+const notificationFormats = new Map([
+  ['retake_scheduled', {
+    meta: appointed,
+    title: 'Назначена пересдача',
+    body: details => scheduleBody('Вам назначена пересдача.', 'Дата', details),
+  }],
+  ['retake_scheduled_teacher', {
+    meta: appointed,
+    title: 'Вы назначены на пересдачу',
+    body: details => scheduleBody('Вы назначены преподавателем на пересдачу.', 'Дата', details),
+  }],
+  ['retake_updated', retakeUpdated],
+  ['retake_updated_teacher', retakeUpdated],
+  ['retake_cancelled', retakeCancelled],
+  ['retake_cancelled_teacher', retakeCancelled],
+  ['retake_grade_received', {
+    meta: grade,
+    title: 'Выставлена оценка',
+    body: ({ payload }) => payload.grade != null
+      ? `По результатам пересдачи выставлена оценка: ${payload.grade}.`
+      : 'По результатам пересдачи выставлена итоговая оценка.',
+  }],
+  ['retake_change_approved', {
+    meta: changed,
+    title: 'Изменение пересдачи одобрено',
+    body: 'Деканат одобрил вашу заявку на изменение пересдачи. Изменения применены.',
+  }],
+  ['retake_change_rejected', {
+    meta: cancelled,
+    title: 'Изменение пересдачи отклонено',
+    body: ({ reason }) => reason
+      ? `Деканат отклонил вашу заявку на изменение пересдачи. Причина: ${reason}.`
+      : 'Деканат отклонил вашу заявку на изменение пересдачи.',
+  }],
+  ['retake_request_approved', {
+    meta: appointed,
+    title: 'Заявка на пересдачу одобрена',
+    body: 'Деканат одобрил вашу заявку на пересдачу. Пересдача создана.',
+  }],
+  ['retake_request_rejected', {
+    meta: cancelled,
+    title: 'Заявка на пересдачу отклонена',
+    body: ({ reason }) => reason
+      ? `Деканат отклонил вашу заявку на пересдачу. Причина: ${reason}.`
+      : 'Деканат отклонил вашу заявку на пересдачу.',
+  }],
+  ['teacher_request_approved', {
+    meta: appointed,
+    title: 'Заявка на преподавателя одобрена',
+    body: 'Ваша заявка на роль преподавателя одобрена деканатом.',
+  }],
+  ['teacher_request_rejected', {
+    meta: cancelled,
+    title: 'Заявка на преподавателя отклонена',
+    body: ({ reason }) => reason
+      ? `Ваша заявка на роль преподавателя отклонена. Причина: ${reason}.`
+      : 'Ваша заявка на роль преподавателя отклонена деканатом.',
+  }],
+])
+
 export function notifMeta(kind) {
-  switch (kind) {
-    case 'retake_scheduled':
-    case 'retake_scheduled_teacher':
-    case 'retake_request_approved':
-    case 'teacher_request_approved':
-      return { img: iconAppointed,   bg: 'rgba(110,114,200,.12)', label: 'appointed' }
-    case 'retake_change_approved':
-    case 'retake_updated':
-    case 'retake_updated_teacher':
-      return { img: iconChanged,     bg: 'rgba(59,63,224,.10)',   label: 'changed'   }
-    case 'retake_cancelled':
-    case 'retake_cancelled_teacher':
-    case 'retake_change_rejected':
-    case 'retake_request_rejected':
-    case 'teacher_request_rejected':
-      return { img: null,            bg: 'rgba(220,38,38,.08)',   label: 'cancelled' }
-    case 'retake_grade_received':
-      return { img: iconAppreciated, bg: 'rgba(16,185,129,.10)',  label: 'grade'     }
-    default:
-      return { img: null,            bg: 'rgba(107,114,128,.10)', label: 'bell'      }
-  }
+  return { ...(notificationFormats.get(kind)?.meta ?? fallback) }
 }
 
 export function notifTitle(n) {
   if (n.title) return n.title
-  switch (n.kind ?? n.type) {
-    case 'retake_scheduled':          return 'Назначена пересдача'
-    case 'retake_scheduled_teacher':  return 'Вы назначены на пересдачу'
-    case 'retake_updated':            return 'Пересдача перенесена'
-    case 'retake_updated_teacher':    return 'Пересдача перенесена'
-    case 'retake_cancelled':          return 'Пересдача отменена'
-    case 'retake_cancelled_teacher':  return 'Пересдача отменена'
-    case 'retake_grade_received':     return 'Выставлена оценка'
-    case 'retake_change_approved':    return 'Изменение пересдачи одобрено'
-    case 'retake_change_rejected':    return 'Изменение пересдачи отклонено'
-    case 'retake_request_approved':   return 'Заявка на пересдачу одобрена'
-    case 'retake_request_rejected':   return 'Заявка на пересдачу отклонена'
-    case 'teacher_request_approved':  return 'Заявка на преподавателя одобрена'
-    case 'teacher_request_rejected':  return 'Заявка на преподавателя отклонена'
-    default:                          return 'Уведомление'
-  }
+  return notificationFormats.get(n.kind ?? n.type)?.title ?? 'Уведомление'
 }
 
 function fmtDate(iso) {
@@ -58,72 +107,15 @@ function fmtDate(iso) {
 
 export function notifBody(n) {
   if (n.body) return n.body
-  const p = n.payload || {}
-  const when  = p.scheduled_at ? fmtDate(p.scheduled_at) : ''
-  const where  = [p.building && `корп. ${p.building}`, p.room && `ауд. ${p.room}`].filter(Boolean).join(', ')
-  const reason = p.decision_reason || ''
-
-  switch (n.kind ?? n.type) {
-    case 'retake_scheduled':
-      return [
-        'Вам назначена пересдача.',
-        when  && `Дата: ${when}.`,
-        where && `Место: ${where}.`,
-      ].filter(Boolean).join(' ')
-
-    case 'retake_scheduled_teacher':
-      return [
-        'Вы назначены преподавателем на пересдачу.',
-        when  && `Дата: ${when}.`,
-        where && `Место: ${where}.`,
-      ].filter(Boolean).join(' ')
-
-    case 'retake_updated':
-    case 'retake_updated_teacher':
-      return [
-        'Детали пересдачи изменены.',
-        when  && `Новое время: ${when}.`,
-        where && `Место: ${where}.`,
-      ].filter(Boolean).join(' ')
-
-    case 'retake_cancelled':
-    case 'retake_cancelled_teacher':
-      return reason
-        ? `Пересдача отменена деканатом. Причина: ${reason}.`
-        : 'Пересдача была отменена деканатом.'
-
-    case 'retake_grade_received':
-      return p.grade != null
-        ? `По результатам пересдачи выставлена оценка: ${p.grade}.`
-        : 'По результатам пересдачи выставлена итоговая оценка.'
-
-    case 'retake_change_approved':
-      return 'Деканат одобрил вашу заявку на изменение пересдачи. Изменения применены.'
-
-    case 'retake_change_rejected':
-      return reason
-        ? `Деканат отклонил вашу заявку на изменение пересдачи. Причина: ${reason}.`
-        : 'Деканат отклонил вашу заявку на изменение пересдачи.'
-
-    case 'retake_request_approved':
-      return 'Деканат одобрил вашу заявку на пересдачу. Пересдача создана.'
-
-    case 'retake_request_rejected':
-      return reason
-        ? `Деканат отклонил вашу заявку на пересдачу. Причина: ${reason}.`
-        : 'Деканат отклонил вашу заявку на пересдачу.'
-
-    case 'teacher_request_approved':
-      return 'Ваша заявка на роль преподавателя одобрена деканатом.'
-
-    case 'teacher_request_rejected':
-      return reason
-        ? `Ваша заявка на роль преподавателя отклонена. Причина: ${reason}.`
-        : 'Ваша заявка на роль преподавателя отклонена деканатом.'
-
-    default:
-      return ''
-  }
+  const payload = n.payload || {}
+  const when = payload.scheduled_at ? fmtDate(payload.scheduled_at) : ''
+  const where = [
+    payload.building && `корп. ${payload.building}`,
+    payload.room && `ауд. ${payload.room}`,
+  ].filter(Boolean).join(', ')
+  const reason = payload.decision_reason || ''
+  const body = notificationFormats.get(n.kind ?? n.type)?.body
+  return typeof body === 'function' ? body({ payload, when, where, reason }) : body ?? ''
 }
 
 export function timeAgo(iso) {
