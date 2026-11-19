@@ -21,6 +21,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/discipline"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakeschedule"
 )
 
 // TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
@@ -154,7 +155,7 @@ func TestSubmit_OK(t *testing.T) {
 
 	newRoom := "202"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "pending", req.Status)
@@ -180,7 +181,7 @@ func TestSubmit_RejectsNonParticipant(t *testing.T) {
 
 	newRoom := "303"
 	_, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), outsider, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.ErrorIs(t, err, changerequest.ErrForbidden)
 }
@@ -197,7 +198,7 @@ func TestSubmit_RejectsStudentParticipant(t *testing.T) {
 
 	newRoom := "404"
 	_, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), student, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	// студент — участник, но не teacher/commission_member
 	require.ErrorIs(t, err, changerequest.ErrForbidden)
@@ -230,7 +231,7 @@ func TestApprove_AppliesChangesToRetake(t *testing.T) {
 	newBuilding := "Б"
 	newRoom := "205"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Building: &newBuilding, Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Building: &newBuilding, Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -251,6 +252,42 @@ func TestApprove_AppliesChangesToRetake(t *testing.T) {
 	require.Equal(t, "205", updatedRetake.Room)
 }
 
+func TestApprove_UsesChosenSlotAndKeepsUnspecifiedFields(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	teacher := seedUser(t, f.store, "cr-slots-tr")
+	student := seedUser(t, f.store, "cr-slots-st")
+	dean := seedUser(t, f.store, "cr-slots-dn")
+	discID := seedDiscipline(t, f, "SLOTS", teacher, student)
+	r := createScheduledRetake(t, f, discID, dean)
+	addTeacherParticipant(t, f, pgutil.UUID(r.ID), teacher, dean)
+
+	first := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
+	chosen := first.Add(time.Hour)
+	req, err := f.svc.Submit(ctx, pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
+		Changes: changerequest.Changes{ProposedSlots: []time.Time{first, chosen}},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = f.store.Pool().Exec(ctx, "DELETE FROM retake_change_requests WHERE id = $1", pgutil.PgUUID(req.ID))
+	})
+
+	_, err = f.svc.Approve(ctx, req.ID, dean, nil, nil)
+	require.ErrorIs(t, err, changerequest.ErrSlotRequired)
+	approved, err := f.svc.Approve(ctx, req.ID, dean, nil, &chosen)
+	require.NoError(t, err)
+	require.Equal(t, "approved", approved.Status)
+
+	updated, err := f.store.GetRetakeByID(ctx, r.ID)
+	require.NoError(t, err)
+	require.True(t, updated.ScheduledAt.Valid)
+	require.True(t, chosen.Equal(updated.ScheduledAt.Time))
+	require.Equal(t, r.Building, updated.Building)
+	require.Equal(t, r.Room, updated.Room)
+	require.Equal(t, r.DurationMinutes, updated.DurationMinutes)
+	require.Equal(t, r.Notes, updated.Notes)
+}
+
 func TestApprove_AlreadyProcessed(t *testing.T) {
 	f := setup(t)
 	teacher := seedUser(t, f.store, "cr-aa-tr")
@@ -262,7 +299,7 @@ func TestApprove_AlreadyProcessed(t *testing.T) {
 
 	newRoom := "999"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -289,7 +326,7 @@ func TestReject_OK(t *testing.T) {
 
 	newRoom := "111"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -315,7 +352,7 @@ func TestReject_RequiresReason(t *testing.T) {
 
 	newRoom := "222"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -344,7 +381,7 @@ func TestSubmit_RetakeNotActive(t *testing.T) {
 
 	newRoom := "555"
 	_, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.ErrorIs(t, err, changerequest.ErrRetakeNotActive)
 }
@@ -360,7 +397,7 @@ func TestReject_AlreadyProcessed(t *testing.T) {
 
 	newRoom := "666"
 	req, err := f.svc.Submit(context.Background(), pgutil.UUID(r.ID), teacher, changerequest.SubmitInput{
-		Changes: changerequest.Changes{Room: &newRoom},
+		Changes: changerequest.Changes{Patch: retakeschedule.Patch{Room: &newRoom}},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {

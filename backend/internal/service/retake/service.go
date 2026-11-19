@@ -27,6 +27,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakeschedule"
 )
 
 // Константы статусов и видов пересдач (соответствуют CHECK-constraint
@@ -176,13 +177,7 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (queries.Retake, error)
 }
 
 // UpdateScheduleInput — PATCH-семантика, поля nil не меняются.
-type UpdateScheduleInput struct {
-	Building        *string
-	Room            *string
-	ScheduledAt     *pgutilTime
-	DurationMinutes *int32
-	Notes           *string
-}
+type UpdateScheduleInput = retakeschedule.Patch
 
 // UpdateSchedule меняет место/время/продолжительность пересдачи.
 // Используется при ручной правке деканатом или при одобрении
@@ -206,23 +201,7 @@ func (s *Service) UpdateSchedule(ctx context.Context, id uuid.UUID, in UpdateSch
 
 	var updated queries.Retake
 	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		params := queries.UpdateRetakeScheduleParams{ID: current.ID, Notes: in.Notes}
-		if in.Building != nil {
-			b := strings.TrimSpace(*in.Building)
-			params.Building = &b
-		}
-		if in.Room != nil {
-			rm := strings.TrimSpace(*in.Room)
-			params.Room = &rm
-		}
-		if in.ScheduledAt != nil {
-			params.ScheduledAt = in.ScheduledAt.toTimestamptz()
-		}
-		if in.DurationMinutes != nil {
-			params.DurationMinutes = in.DurationMinutes
-		}
-
-		row, err := q.UpdateRetakeSchedule(ctx, params)
+		row, err := q.UpdateRetakeSchedule(ctx, in.UpdateParams(current.ID))
 		if err != nil {
 			if repo.IsNotFound(err) {
 				return ErrNotFound

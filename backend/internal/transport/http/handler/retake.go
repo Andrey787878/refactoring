@@ -187,11 +187,9 @@ func (h *RetakeHandler) Update(w http.ResponseWriter, r *http.Request) {
 	in := retake.UpdateScheduleInput{
 		Building:        req.Building,
 		Room:            req.Room,
+		ScheduledAt:     req.ScheduledAt,
 		DurationMinutes: req.DurationMinutes,
 		Notes:           req.Notes,
-	}
-	if req.ScheduledAt != nil {
-		in.ScheduledAt = retake.NewTimePtr(req.ScheduledAt)
 	}
 	row, err := h.svc.UpdateSchedule(r.Context(), id, in, userID)
 	if err != nil {
