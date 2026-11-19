@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"iter"
 	"strconv"
 	"strings"
 	"time"
@@ -88,11 +89,9 @@ func exportCSV(rows []RetakeReportRow) ([]byte, error) {
 	if err := w.Write(reportHeaders); err != nil {
 		return nil, fmt.Errorf("write csv header: %w", err)
 	}
-	for _, r := range rows {
-		for _, student := range studentsOrPlaceholder(r) {
-			if err := w.Write(formatRow(r, student)); err != nil {
-				return nil, fmt.Errorf("write csv row: %w", err)
-			}
+	for values := range formattedRows(rows) {
+		if err := w.Write(values); err != nil {
+			return nil, fmt.Errorf("write csv row: %w", err)
 		}
 	}
 	w.Flush()
@@ -131,20 +130,17 @@ func exportXLSX(rows []RetakeReportRow) ([]byte, error) {
 
 	// Данные.
 	rowNum := 2
-	for _, r := range rows {
-		for _, student := range studentsOrPlaceholder(r) {
-			values := formatRow(r, student)
-			for col, val := range values {
-				cell, err := excelize.CoordinatesToCellName(col+1, rowNum)
-				if err != nil {
-					return nil, fmt.Errorf("coord (%d,%d): %w", col+1, rowNum, err)
-				}
-				if err := f.SetCellValue(sheet, cell, val); err != nil {
-					return nil, fmt.Errorf("set cell: %w", err)
-				}
+	for values := range formattedRows(rows) {
+		for col, val := range values {
+			cell, err := excelize.CoordinatesToCellName(col+1, rowNum)
+			if err != nil {
+				return nil, fmt.Errorf("coord (%d,%d): %w", col+1, rowNum, err)
 			}
-			rowNum++
+			if err := f.SetCellValue(sheet, cell, val); err != nil {
+				return nil, fmt.Errorf("set cell: %w", err)
+			}
 		}
+		rowNum++
 	}
 
 	var buf bytes.Buffer
@@ -152,6 +148,18 @@ func exportXLSX(rows []RetakeReportRow) ([]byte, error) {
 		return nil, fmt.Errorf("write xlsx: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+func formattedRows(rows []RetakeReportRow) iter.Seq[[]string] {
+	return func(yield func([]string) bool) {
+		for _, retake := range rows {
+			for _, student := range studentsOrPlaceholder(retake) {
+				if !yield(formatRow(retake, student)) {
+					return
+				}
+			}
+		}
+	}
 }
 
 // studentsOrPlaceholder возвращает либо реальный список студентов
