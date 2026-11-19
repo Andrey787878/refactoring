@@ -136,7 +136,7 @@ func TestNotify_RetakeUpdated_OnScheduleChange(t *testing.T) {
 	// из проверки. Маркируем "прочитанным всё непрочитанное".
 	markAllRead(t, f.store, student)
 
-	newTime := retake.NewTime(time.Now().Add(48 * time.Hour))
+	newTime := time.Now().Add(48 * time.Hour)
 	newRoom := "202"
 	_, err := f.svc.UpdateSchedule(context.Background(),
 		pgutil.UUID(r.ID),

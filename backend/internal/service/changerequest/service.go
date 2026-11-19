@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
@@ -33,6 +32,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/changelog"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/notify"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retakeschedule"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/timeutil"
 )
 
@@ -69,20 +69,15 @@ const maxProposedSlots = 3
 // Хотя бы одно поле должно быть задано (проверяет сервис через hasAny).
 // Маршалится в JSONB при сохранении, размаршалится при чтении.
 type Changes struct {
-	Building    *string    `json:"building,omitempty"`
-	Room        *string    `json:"room,omitempty"`
-	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
+	retakeschedule.Patch
 	// ProposedSlots — несколько предложенных вариантов новой даты (1..3).
 	// Если их больше одного, декан выбирает конкретный при одобрении, и он
 	// становится ScheduledAt пересдачи.
-	ProposedSlots   []time.Time `json:"proposed_slots,omitempty"`
-	DurationMinutes *int32      `json:"duration_minutes,omitempty"`
-	Notes           *string     `json:"notes,omitempty"`
+	ProposedSlots []time.Time `json:"proposed_slots,omitempty"`
 }
 
 func (c Changes) hasAny() bool {
-	return c.Building != nil || c.Room != nil || c.ScheduledAt != nil ||
-		len(c.ProposedSlots) > 0 || c.DurationMinutes != nil || c.Notes != nil
+	return c.Patch.HasChanges() || len(c.ProposedSlots) > 0
 }
 
 // Request — доменная модель заявки. Наружу sqlc-структуры не текут.
@@ -256,7 +251,7 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 		return Request{}, fmt.Errorf("get retake for snapshot: %w", err)
 	}
 
-	updateParams := buildUpdateParams(currentRetake.ID, req.Changes)
+	updateParams := req.Changes.Patch.UpdateParams(currentRetake.ID)
 
 	var approved queries.RetakeChangeRequest
 	var updatedRetake queries.Retake
@@ -448,30 +443,6 @@ func resolveSlot(slots []time.Time, selectedSlot *time.Time) (time.Time, error) 
 		}
 	}
 	return time.Time{}, ErrSlotNotProposed
-}
-
-// buildUpdateParams формирует params для q.UpdateRetakeSchedule из Changes.
-// Поля nil передаются как NULL — COALESCE в SQL оставит текущее значение.
-// ScheduledAt не pointer в params (pgtype.Timestamptz), нулевое значение
-// (Valid=false) интерпретируется как NULL → COALESCE оставит старое.
-func buildUpdateParams(retakeID pgtype.UUID, c Changes) queries.UpdateRetakeScheduleParams {
-	params := queries.UpdateRetakeScheduleParams{ID: retakeID}
-	if c.Building != nil {
-		b := strings.TrimSpace(*c.Building)
-		params.Building = &b
-	}
-	if c.Room != nil {
-		rm := strings.TrimSpace(*c.Room)
-		params.Room = &rm
-	}
-	if c.ScheduledAt != nil {
-		params.ScheduledAt = pgtype.Timestamptz{Time: *c.ScheduledAt, Valid: true}
-	}
-	if c.DurationMinutes != nil {
-		params.DurationMinutes = c.DurationMinutes
-	}
-	params.Notes = c.Notes
-	return params
 }
 
 // retakeScheduleFields формирует срез расписания для change_logs.

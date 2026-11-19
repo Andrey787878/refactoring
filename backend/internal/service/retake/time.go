@@ -23,16 +23,6 @@ func NewTime(t time.Time) pgutilTime {
 	return pgutilTime{Time: t, Valid: true}
 }
 
-// NewTimePtr возвращает *pgutilTime для опциональных полей PATCH.
-// nil → не передаём в запрос (поле не меняется).
-func NewTimePtr(t *time.Time) *pgutilTime {
-	if t == nil {
-		return nil
-	}
-	pt := NewTime(*t)
-	return &pt
-}
-
 func (p pgutilTime) toTimestamptz() pgtype.Timestamptz {
 	if !p.Valid {
 		return pgtype.Timestamptz{}

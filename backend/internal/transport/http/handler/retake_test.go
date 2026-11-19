@@ -280,6 +280,33 @@ func TestRetake_Create_201(t *testing.T) {
 
 // ── Start / Complete / Cancel ───────────────────────────────────────────────
 
+func TestRetake_Update_ForwardsPatchOnce(t *testing.T) {
+	retakeID, actorID := uuid.New(), uuid.New()
+	date, err := time.Parse(time.RFC3339, "2027-02-17T14:30:00+05:00")
+	require.NoError(t, err)
+	building, room := " Б ", ""
+	duration := int32(45)
+	calls := 0
+	service := &retakeServiceStub{
+		updateScheduleFn: func(_ context.Context, id uuid.UUID, in retake.UpdateScheduleInput, actor uuid.UUID) (queries.Retake, error) {
+			calls++
+			assert.Equal(t, retakeID, id)
+			assert.Equal(t, actorID, actor)
+			assert.Equal(t, retake.UpdateScheduleInput{
+				Building: &building, Room: &room, ScheduledAt: &date, DurationMinutes: &duration,
+			}, in)
+			return queries.Retake{ID: pgUUID(id)}, nil
+		},
+	}
+	router := retakeFixture(handler.NewRetakeHandler(service))
+	body := bytes.NewBufferString(`{"building":" Б ","room":"","scheduled_at":"2027-02-17T14:30:00+05:00","duration_minutes":45}`)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/retakes/"+retakeID.String(), body)
+	router.ServeHTTP(recorder, withUser(req, actorID))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, 1, calls)
+}
+
 func TestRetake_Start_422_InvalidStatus(t *testing.T) {
 	// ErrInvalidStatus → 422 Unprocessable Entity (PR #40 от Андрея).
 	// 409 Conflict зарезервирован под коллизии уникальности
