@@ -477,6 +477,88 @@ function participantName(p) {
   return [p.last_name, p.first_name, p.middle_name].filter(Boolean).join(' ') || '—'
 }
 
+function participantChanges(original, participants) {
+  const origT = new Set(original.teacherIds)
+  const origS = new Set(original.studentIds)
+  const curT  = participants.teachers
+  const curS  = participants.students
+  const curTids = new Set(curT.map(p => p.user_id))
+  const curSids = new Set(curS.map(p => p.user_id))
+
+  const teachersToAdd    = curT.filter(p => !origT.has(p.user_id))
+  const studentsToAdd    = curS.filter(p => !origS.has(p.user_id))
+  const teachersToRemove = [...origT].filter(uid => !curTids.has(uid))
+  const studentsToRemove = [...origS].filter(uid => !curSids.has(uid))
+
+  return { teachersToAdd, studentsToAdd, teachersToRemove, studentsToRemove }
+}
+
+async function applyParticipantChanges(id, changes) {
+  const { teachersToAdd, studentsToAdd, teachersToRemove, studentsToRemove } = changes
+  // Сначала добавляем, потом удаляем — чтобы при замене (снять одного,
+  //    добавить другого) не нарушить минимум преподавателей на полпути.
+  for (const t of teachersToAdd) await retakesApi.addTeacher(id, t.user_id)
+  for (const s of studentsToAdd) await retakesApi.addStudent(id, { student_id: s.user_id, debt_id: s.debtId })
+  for (const uid of teachersToRemove) await retakesApi.removeTeacher(id, uid)
+  for (const uid of studentsToRemove) await retakesApi.removeStudent(id, uid)
+}
+
+async function saveChangedSchedule(id) {
+  // Расписание шлём только если оно реально изменилось — иначе лишний
+  //    апдейт (бэк всё равно не разошлёт уведомления, но не плодим записи).
+  const p = partsInTZ(editTarget.value.scheduled_at)
+  // Дата редактируется пользователем (формат dd.MM.yyyy). Если поле
+  // пустое — оставляем исходную дату пересдачи.
+  let dateForIso = `${p.year}-${p.month}-${p.day}`
+  let dateChanged = false
+  if (editForm.date) {
+    const [dd, mm, yy] = editForm.date.split('.')
+    if (dd && mm && yy) {
+      dateForIso = `${yy}-${mm}-${dd}`
+      dateChanged = dd !== p.day || mm !== p.month || yy !== p.year
+    }
+  }
+  const newScheduledAt = toUtcISO(
+    dateForIso,
+    `${editForm.hour}:${editForm.minute}`,
+  )
+  const scheduleChanged =
+    (editForm.building || '') !== (editTarget.value.building || '') ||
+    (editForm.room || '')     !== (editTarget.value.room || '') ||
+    Number(editForm.duration) !== Number(editTarget.value.duration_minutes) ||
+    dateChanged ||
+    editForm.hour   !== p.hour ||
+    editForm.minute !== p.minute
+
+  if (scheduleChanged) {
+    await retakesApi.update(id, {
+      building:         editForm.building,
+      room:             editForm.room,
+      duration_minutes: editForm.duration,
+      scheduled_at:     newScheduledAt,
+    })
+    const idx = retakes.value.findIndex(r => r.id === id)
+    if (idx !== -1) {
+      retakes.value[idx] = {
+        ...retakes.value[idx],
+        building:         editForm.building,
+        room:             editForm.room,
+        duration_minutes: editForm.duration,
+        scheduled_at:     newScheduledAt,
+      }
+    }
+  }
+}
+
+async function saveChangedStatus(id) {
+  // Шлём статус только если декан реально его поменял в пикере.
+  if (auth.isDean && editStatusSelect.value && editStatusSelect.value !== editTarget.value.status) {
+    await retakesApi.setStatus(id, editStatusSelect.value)
+    const idx = retakes.value.findIndex(r => r.id === id)
+    if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: editStatusSelect.value }
+  }
+}
+
 async function saveEdit() {
   if (!editTarget.value) return
   editError.value = ''
@@ -484,77 +566,9 @@ async function saveEdit() {
   try {
     const id = editTarget.value.id
 
-    // 1) Диф состава относительно снимка при открытии.
-    const origT = new Set(editOriginal.value.teacherIds)
-    const origS = new Set(editOriginal.value.studentIds)
-    const curT  = editParticipants.value.teachers
-    const curS  = editParticipants.value.students
-    const curTids = new Set(curT.map(p => p.user_id))
-    const curSids = new Set(curS.map(p => p.user_id))
-
-    const teachersToAdd    = curT.filter(p => !origT.has(p.user_id))
-    const studentsToAdd    = curS.filter(p => !origS.has(p.user_id))
-    const teachersToRemove = [...origT].filter(uid => !curTids.has(uid))
-    const studentsToRemove = [...origS].filter(uid => !curSids.has(uid))
-
-    // 2) Сначала добавляем, потом удаляем — чтобы при замене (снять одного,
-    //    добавить другого) не нарушить минимум преподавателей на полпути.
-    for (const t of teachersToAdd) await retakesApi.addTeacher(id, t.user_id)
-    for (const s of studentsToAdd) await retakesApi.addStudent(id, { student_id: s.user_id, debt_id: s.debtId })
-    for (const uid of teachersToRemove) await retakesApi.removeTeacher(id, uid)
-    for (const uid of studentsToRemove) await retakesApi.removeStudent(id, uid)
-
-    // 3) Расписание шлём только если оно реально изменилось — иначе лишний
-    //    апдейт (бэк всё равно не разошлёт уведомления, но не плодим записи).
-    const p = partsInTZ(editTarget.value.scheduled_at)
-    // Дата редактируется пользователем (формат dd.MM.yyyy). Если поле
-    // пустое — оставляем исходную дату пересдачи.
-    let dateForIso = `${p.year}-${p.month}-${p.day}`
-    let dateChanged = false
-    if (editForm.date) {
-      const [dd, mm, yy] = editForm.date.split('.')
-      if (dd && mm && yy) {
-        dateForIso = `${yy}-${mm}-${dd}`
-        dateChanged = dd !== p.day || mm !== p.month || yy !== p.year
-      }
-    }
-    const newScheduledAt = toUtcISO(
-      dateForIso,
-      `${editForm.hour}:${editForm.minute}`,
-    )
-    const scheduleChanged =
-      (editForm.building || '') !== (editTarget.value.building || '') ||
-      (editForm.room || '')     !== (editTarget.value.room || '') ||
-      Number(editForm.duration) !== Number(editTarget.value.duration_minutes) ||
-      dateChanged ||
-      editForm.hour   !== p.hour ||
-      editForm.minute !== p.minute
-
-    if (scheduleChanged) {
-      await retakesApi.update(id, {
-        building:         editForm.building,
-        room:             editForm.room,
-        duration_minutes: editForm.duration,
-        scheduled_at:     newScheduledAt,
-      })
-      const idx = retakes.value.findIndex(r => r.id === id)
-      if (idx !== -1) {
-        retakes.value[idx] = {
-          ...retakes.value[idx],
-          building:         editForm.building,
-          room:             editForm.room,
-          duration_minutes: editForm.duration,
-          scheduled_at:     newScheduledAt,
-        }
-      }
-    }
-
-    // 4) Статус: шлём только если декан реально его поменял в пикере.
-    if (auth.isDean && editStatusSelect.value && editStatusSelect.value !== editTarget.value.status) {
-      await retakesApi.setStatus(id, editStatusSelect.value)
-      const idx = retakes.value.findIndex(r => r.id === id)
-      if (idx !== -1) retakes.value[idx] = { ...retakes.value[idx], status: editStatusSelect.value }
-    }
+    await applyParticipantChanges(id, participantChanges(editOriginal.value, editParticipants.value))
+    await saveChangedSchedule(id)
+    await saveChangedStatus(id)
 
     closeEdit()
   } catch (e) {
