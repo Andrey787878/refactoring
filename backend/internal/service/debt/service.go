@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/grade"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -214,8 +215,9 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (queries.Debt, error) {
 //
 // Если переход не сработал (status уже не open или запись удалена) —
 // возвращаем ErrNotOpen, чтобы фронт показал понятное сообщение.
-func (s *Service) Grade(ctx context.Context, id uuid.UUID, grade int32, gradedBy uuid.UUID) (queries.Debt, error) {
-	if grade < 2 || grade > 5 {
+func (s *Service) Grade(ctx context.Context, id uuid.UUID, rawGrade int32, gradedBy uuid.UUID) (queries.Debt, error) {
+	parsedGrade, ok := grade.Parse(rawGrade)
+	if !ok {
 		return queries.Debt{}, ErrInvalidGrade
 	}
 
@@ -237,6 +239,7 @@ func (s *Service) Grade(ctx context.Context, id uuid.UUID, grade int32, gradedBy
 		return queries.Debt{}, ErrTeacherNotAssigned
 	}
 
+	grade := parsedGrade.Int32()
 	var updated queries.Debt
 	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		row, err := q.GradeDebt(ctx, queries.GradeDebtParams{

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/grade"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -35,8 +36,9 @@ func (s *Service) GetSheet(ctx context.Context, retakeID uuid.UUID) (queries.Sta
 
 // SaveDraftGrade пишет ЧЕРНОВИК оценки студенту. Долг НЕ закрывается,
 // эмулятор НЕ трогается. Перезапись разрешена, пока ведомость open.
-func (s *Service) SaveDraftGrade(ctx context.Context, retakeID, studentID uuid.UUID, grade int32, actorID uuid.UUID) error {
-	if grade < 2 || grade > 5 {
+func (s *Service) SaveDraftGrade(ctx context.Context, retakeID, studentID uuid.UUID, rawGrade int32, actorID uuid.UUID) error {
+	parsedGrade, ok := grade.Parse(rawGrade)
+	if !ok {
 		return fmt.Errorf("%w", ErrInvalidGrade)
 	}
 
@@ -79,6 +81,7 @@ func (s *Service) SaveDraftGrade(ctx context.Context, retakeID, studentID uuid.U
 		return ErrStudentNeedsDebt
 	}
 
+	grade := parsedGrade.Int32()
 	return s.store.RunInTx(ctx, func(q *queries.Queries) error {
 		if _, err := q.UpsertParticipantGradeDraft(ctx, queries.UpsertParticipantGradeDraftParams{
 			ID:       participant.ID,
