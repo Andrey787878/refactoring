@@ -122,6 +122,11 @@ type ParticipantInfo struct {
 	Grade     *int32 // только у студентов после проставления
 }
 
+type retakeParticipants struct {
+	students []queries.ListStudentParticipantsForRetakeRow
+	teachers []queries.RetakeParticipant
+}
+
 // RetakesForPeriod возвращает детальный список проведённых пересдач
 // за период [from, to). Включает только status='completed' — для
 // архива защит/отчётности. Использует батч-запросы вместо N+1.
@@ -141,7 +146,24 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 		return nil, nil
 	}
 
-	// --- батч дисциплин ---
+	discMap, err := s.loadRetakeDisciplines(ctx, retakes)
+	if err != nil {
+		return nil, err
+	}
+
+	participantsMap, userMap, err := s.loadRetakeParticipants(ctx, retakes)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]RetakeReportRow, 0, len(retakes))
+	for _, r := range retakes {
+		out = append(out, buildRetakeReportRow(r, discMap, participantsMap[r.ID], userMap))
+	}
+	return out, nil
+}
+
+func (s *Service) loadRetakeDisciplines(ctx context.Context, retakes []queries.Retake) (map[pgtype.UUID]queries.Discipline, error) {
 	discIDs := make([]pgtype.UUID, len(retakes))
 	for i, r := range retakes {
 		discIDs[i] = r.DisciplineID
@@ -150,29 +172,27 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 	if err != nil {
 		return nil, fmt.Errorf("list disciplines for retakes: %w", err)
 	}
+
 	discMap := make(map[pgtype.UUID]queries.Discipline, len(discs))
 	for _, d := range discs {
 		discMap[d.ID] = d
 	}
+	return discMap, nil
+}
 
-	// --- участники и батч пользователей ---
-	// Сначала собираем всех участников по всем пересдачам,
-	// потом одним запросом тянем нужных преподавателей.
-	type retakeParticipants struct {
-		students []queries.ListStudentParticipantsForRetakeRow
-		teachers []queries.RetakeParticipant
-	}
+func (s *Service) loadRetakeParticipants(ctx context.Context, retakes []queries.Retake) (map[pgtype.UUID]retakeParticipants, map[pgtype.UUID]queries.User, error) {
+	// Сначала собираем участников по каждой пересдаче, затем одним
+	// запросом загружаем пользователей-преподавателей.
 	participantsMap := make(map[pgtype.UUID]retakeParticipants, len(retakes))
-
 	teacherUserIDSet := make(map[pgtype.UUID]struct{})
 	for _, r := range retakes {
 		students, err := s.store.ListStudentParticipantsForRetake(ctx, r.ID)
 		if err != nil {
-			return nil, fmt.Errorf("list students for retake %s: %w", pgutil.UUID(r.ID), err)
+			return nil, nil, fmt.Errorf("list students for retake %s: %w", pgutil.UUID(r.ID), err)
 		}
 		teachers, err := s.store.ListTeacherParticipantsForRetake(ctx, r.ID)
 		if err != nil {
-			return nil, fmt.Errorf("list teachers for retake %s: %w", pgutil.UUID(r.ID), err)
+			return nil, nil, fmt.Errorf("list teachers for retake %s: %w", pgutil.UUID(r.ID), err)
 		}
 		participantsMap[r.ID] = retakeParticipants{students: students, teachers: teachers}
 		for _, t := range teachers {
@@ -180,7 +200,6 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 		}
 	}
 
-	// Батч-выборка всех преподавателей одним запросом.
 	teacherIDs := make([]pgtype.UUID, 0, len(teacherUserIDSet))
 	for id := range teacherUserIDSet {
 		teacherIDs = append(teacherIDs, id)
@@ -189,56 +208,53 @@ func (s *Service) RetakesForPeriod(ctx context.Context, from, to time.Time) ([]R
 	if len(teacherIDs) > 0 {
 		teacherUsers, err := s.store.ListUsersByIDs(ctx, teacherIDs)
 		if err != nil {
-			return nil, fmt.Errorf("list teacher users: %w", err)
+			return nil, nil, fmt.Errorf("list teacher users: %w", err)
 		}
 		for _, u := range teacherUsers {
 			userMap[u.ID] = u
 		}
 	}
+	return participantsMap, userMap, nil
+}
 
-	// --- сборка результата ---
-	out := make([]RetakeReportRow, 0, len(retakes))
-	for _, r := range retakes {
-		row := RetakeReportRow{
-			RetakeID:        pgutil.UUID(r.ID),
-			Kind:            r.Kind,
-			Building:        r.Building,
-			Room:            r.Room,
-			ScheduledAt:     r.ScheduledAt.Time,
-			CompletedAt:     r.CompletedAt.Time,
-			DurationMinutes: r.DurationMinutes,
-		}
-		if d, ok := discMap[r.DisciplineID]; ok {
-			row.DisciplineName = d.Name
-			row.DisciplineCode = d.Code
-		}
-
-		p := participantsMap[r.ID]
-		for _, st := range p.students {
-			row.Students = append(row.Students, ParticipantInfo{
-				UserID:    pgutil.UUID(st.UserID),
-				FullName:  fullName(st.LastName, st.FirstName, st.MiddleName),
-				GroupName: st.GroupName,
-				Email:     st.Email,
-				Grade:     st.Grade,
-			})
-		}
-		for _, t := range p.teachers {
-			u, ok := userMap[t.UserID]
-			if !ok {
-				// Пропускаем участника без user — data integrity проблема,
-				// но не повод ломать весь отчёт.
-				continue
-			}
-			row.Teachers = append(row.Teachers, ParticipantInfo{
-				UserID:   pgutil.UUID(t.UserID),
-				FullName: fullName(u.LastName, u.FirstName, u.MiddleName),
-				Email:    u.Email,
-			})
-		}
-		out = append(out, row)
+func buildRetakeReportRow(r queries.Retake, disciplines map[pgtype.UUID]queries.Discipline, participants retakeParticipants, users map[pgtype.UUID]queries.User) RetakeReportRow {
+	row := RetakeReportRow{
+		RetakeID:        pgutil.UUID(r.ID),
+		Kind:            r.Kind,
+		Building:        r.Building,
+		Room:            r.Room,
+		ScheduledAt:     r.ScheduledAt.Time,
+		CompletedAt:     r.CompletedAt.Time,
+		DurationMinutes: r.DurationMinutes,
 	}
-	return out, nil
+	if d, ok := disciplines[r.DisciplineID]; ok {
+		row.DisciplineName = d.Name
+		row.DisciplineCode = d.Code
+	}
+
+	for _, st := range participants.students {
+		row.Students = append(row.Students, ParticipantInfo{
+			UserID:    pgutil.UUID(st.UserID),
+			FullName:  fullName(st.LastName, st.FirstName, st.MiddleName),
+			GroupName: st.GroupName,
+			Email:     st.Email,
+			Grade:     st.Grade,
+		})
+	}
+	for _, t := range participants.teachers {
+		u, ok := users[t.UserID]
+		if !ok {
+			// Пропускаем участника без user — data integrity проблема,
+			// но не повод ломать весь отчёт.
+			continue
+		}
+		row.Teachers = append(row.Teachers, ParticipantInfo{
+			UserID:   pgutil.UUID(t.UserID),
+			FullName: fullName(u.LastName, u.FirstName, u.MiddleName),
+			Email:    u.Email,
+		})
+	}
+	return row
 }
 
 // fullName собирает ФИО в формате "Фамилия Имя Отчество".
