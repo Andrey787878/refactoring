@@ -173,7 +173,7 @@ func (s *Service) List(ctx context.Context, limit, offset int32) ([]queries.Disc
 	if err != nil {
 		return nil, 0, fmt.Errorf("list: %w", err)
 	}
-	total, err := s.store.CountDisciplines(ctx)
+	total, err := s.store.CountSyncedDisciplines(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count: %w", err)
 	}

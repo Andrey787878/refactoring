@@ -133,7 +133,7 @@ func (s *Service) importInitialData(ctx context.Context, since time.Time) {
 	// пропускаем чтобы не тратить rate-limit эмулятора впустую.
 	if since.Year() == 1970 {
 		slog.Info("sync: первый запуск, полный импорт")
-		if n, _ := s.store.CountDisciplines(ctx); n == 0 {
+		if n, _ := s.store.CountSyncedDisciplines(ctx); n == 0 {
 			if err := s.importAllDisciplines(ctx); err != nil {
 				slog.Warn("sync: ошибка импорта дисциплин", "err", err)
 			}
@@ -150,7 +150,7 @@ func (s *Service) importInitialData(ctx context.Context, since time.Time) {
 		} else {
 			slog.Info("sync: пользователи уже загружены, пропускаем", "synced_users", n)
 		}
-		if n, _ := s.store.CountDebts(ctx); n == 0 {
+		if n, _ := s.store.CountSyncedDebts(ctx); n == 0 {
 			if err := s.importAllDebts(ctx); err != nil {
 				slog.Warn("sync: ошибка импорта долгов", "err", err)
 			}
