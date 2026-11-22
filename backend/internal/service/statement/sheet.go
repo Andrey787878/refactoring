@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
@@ -196,7 +197,7 @@ func (s *Service) CloseSheet(ctx context.Context, retakeID, actorID uuid.UUID) e
 	// После коммита: write-back каждой оценки в эмулятор (best-effort) +
 	// уведомление студенту о выставленной оценке.
 	for i := range plans {
-		s.sendGradeToEmulator(plans[i].externalID, plans[i].debtID.String(), plans[i].grade)
+		emulator.SendGradeAsync(s.gradeSender, plans[i].externalID, plans[i].debtID.String(), plans[i].grade, "statement")
 		s.notifyStudent(ctx, plans[i].studentID, gradeReceivedKind, map[string]any{
 			"retake_id":     pgutil.UUID(retake.ID).String(),
 			"discipline_id": plans[i].disciID.String(),

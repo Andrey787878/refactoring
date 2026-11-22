@@ -22,8 +22,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -48,13 +46,7 @@ var (
 	ErrRetakeNotFound      = errors.New("statement: пересдача не найдена")
 )
 
-// GradeSender инкапсулирует отправку оценки во внешнюю систему (деканат).
-// Объявлен здесь, а не переиспользован из retake, чтобы не плодить
-// межпакетную зависимость — контракт одинаковый, обе реализации это
-// *emulator.Client. nil = обратный sync отключён.
-type GradeSender interface {
-	PatchDebtGrade(ctx context.Context, debtExternalID string, grade emulator.Grade, comment *string, idempotencyKey string) error
-}
+type GradeSender = emulator.GradeSender
 
 // Service инкапсулирует операции с ведомостью пересдачи.
 //
@@ -84,8 +76,6 @@ const (
 	actionDraftGraded   = "statement.draft_graded"
 	actionSheetClosed   = "statement.sheet_closed"
 	actionSheetReopened = "statement.sheet_reopened"
-
-	emulatorSendTimeout = 30 * time.Second
 )
 
 // ensureSheet — lazy-create ведомости. Возвращает существующую или
@@ -108,25 +98,4 @@ func (s *Service) ensureSheet(ctx context.Context, retakeID uuid.UUID) (queries.
 		return queries.StatementSheet{}, fmt.Errorf("get statement sheet after conflict: %w", err)
 	}
 	return existing, nil
-}
-
-// sendGradeToEmulator — best-effort write-back оценки в эмулятор в фоне.
-// Копия логики retake.Service: своя горутина с context.Background()+
-// таймаутом, ошибка только в WARN. Обратный sync вспомогательный.
-func (s *Service) sendGradeToEmulator(externalID *string, debtID string, grade int32) {
-	if s.gradeSender == nil || externalID == nil {
-		return
-	}
-	extID := *externalID
-	g := emulator.Grade{Type: "numeric", Value: int(grade)}
-	idemKey := fmt.Sprintf("debt-grade-%s-%d", extID, grade)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), emulatorSendTimeout)
-		defer cancel()
-		if err := s.gradeSender.PatchDebtGrade(ctx, extID, g, nil, idemKey); err != nil {
-			slog.Warn("statement: не удалось отправить оценку в эмулятор (best-effort)",
-				"debt_id", debtID, "external_id", extID, "err", err)
-		}
-	}()
 }
