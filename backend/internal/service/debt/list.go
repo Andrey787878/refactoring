@@ -82,7 +82,7 @@ func (s *Service) ListAll(ctx context.Context, limit, offset int32) ([]queries.D
 	if err != nil {
 		return nil, 0, fmt.Errorf("list all debts: %w", err)
 	}
-	total, err := s.store.CountDebts(ctx)
+	total, err := s.store.CountSyncedDebts(ctx)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count debts: %w", err)
 	}

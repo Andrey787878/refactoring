@@ -304,7 +304,7 @@ func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgt
 	return nil
 }
 
-// CountDisciplines возвращает количество дисциплин, СИНХРОНИЗИРОВАННЫХ
+// CountSyncedDisciplines возвращает количество дисциплин, СИНХРОНИЗИРОВАННЫХ
 // с эмулятором (external_id IS NOT NULL). Используется sync.Service чтобы
 // решить, нужен ли первичный полный импорт.
 //
@@ -312,7 +312,7 @@ func (s *Store) AssignRoleFromSync(ctx context.Context, userID, systemUserID pgt
 // или руками-созданные через UI дисциплины "мешали" бы sync-у:
 // он бы видел "уже есть 6 дисциплин" и пропускал первый импорт из
 // эмулятора, оставляя БД с одним только сид-набором.
-func (s *Store) CountDisciplines(ctx context.Context) (int64, error) {
+func (s *Store) CountSyncedDisciplines(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM disciplines
@@ -356,8 +356,8 @@ func (s *Store) CountSyncedStudentsWithoutGroup(ctx context.Context) (int64, err
 	return n, err
 }
 
-// CountDebts — количество долгов из эмулятора. См. CountDisciplines.
-func (s *Store) CountDebts(ctx context.Context) (int64, error) {
+// CountSyncedDebts — количество долгов из эмулятора. См. CountSyncedDisciplines.
+func (s *Store) CountSyncedDebts(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM debts
