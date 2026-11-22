@@ -24,9 +24,7 @@ import (
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/retake"
 )
 
-// TestMain прогоняет тесты пакета, затем страховочно дочищает тестовый
-// мусор (@test.local). Per-test cleanup может не сработать при гонках
-// параллельных пакетов на общей БД — TestMain гарантирует 0 остатка.
+// TestMain запускает тесты пакета и завершает процесс с их кодом возврата.
 func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }

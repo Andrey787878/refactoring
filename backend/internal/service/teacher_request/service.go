@@ -123,8 +123,8 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, limit, offs
 	return reqs, nil
 }
 
-// Approve одобряет заявку: в одной транзакции меняет статус и выдаёт роль teacher.
-// actorID должен иметь roles.assign (проверяется через rbac.AssignRole).
+// Approve одобряет заявку и назначает роль teacher вместо student в одной транзакции.
+// actorID записывается как автор решения и аудита.
 func (s *Service) Approve(ctx context.Context, actorID, requestID uuid.UUID, reason *string) (queries.TeacherRoleRequest, error) {
 	req, err := s.store.GetTeacherRoleRequestByID(ctx, pgutil.PgUUID(requestID))
 	if err != nil {
