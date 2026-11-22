@@ -2,12 +2,10 @@ package statement
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
@@ -259,7 +257,7 @@ func (s *Service) ReopenSheet(ctx context.Context, retakeID, actorID uuid.UUID) 
 				// 23505: sync уже создал новый open-долг по этой паре
 				// (student, discipline). Пропускаем этот долг — ведомость
 				// всё равно должна открыться (best-effort per debt).
-				if isUniqueViolation(err) {
+				if repo.IsUniqueViolation(err, "") {
 					skipped++
 					slog.Warn("statement: reopen — долг не возвращён в open (конфликт open-долга)",
 						"debt_id", pgutil.UUID(p.DebtID).String())
@@ -302,11 +300,4 @@ func (s *Service) notifyStudent(ctx context.Context, studentID uuid.UUID, kind s
 		slog.Warn("statement: не удалось отправить уведомление",
 			"kind", kind, "user_id", studentID.String(), "err", err)
 	}
-}
-
-// isUniqueViolation — 23505 (нарушение UNIQUE). Тот же паттерн, что в
-// debt/retake сервисах.
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

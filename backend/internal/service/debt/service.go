@@ -23,7 +23,6 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/emulator"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
@@ -144,7 +143,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput, issuedBy uuid.UUID
 			Notes:        in.Notes,
 		})
 		if err != nil {
-			if isUniqueViolation(err) {
+			if repo.IsUniqueViolation(err, "") {
 				return ErrDuplicateOpenDebt
 			}
 			return fmt.Errorf("insert debt: %w", err)
@@ -341,9 +340,4 @@ func debtFields(d queries.Debt) changelog.Fields {
 		f["notes"] = *d.Notes
 	}
 	return f
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
