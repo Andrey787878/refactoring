@@ -69,6 +69,40 @@ func (s *Service) Sync(ctx context.Context) error {
 		return fmt.Errorf("sync: get last_synced_at: %w", err)
 	}
 
+	s.prepareGroups(ctx)
+	s.importInitialData(ctx, since)
+
+	allChanges, err := s.getChanges(ctx, since)
+	if err != nil {
+		return err
+	}
+	if len(allChanges) == 0 {
+		slog.Info("sync: нет новых изменений", "since", since)
+		return s.store.SetLastSyncedAt(ctx, time.Now().UTC())
+	}
+
+	slog.Info("sync: получены изменения", "count", len(allChanges), "since", since)
+	errs, rateLimitedHits := s.applyChanges(ctx, allChanges)
+
+	// Если был rate limit — не двигаем last_synced_at, повторим при следующем тике.
+	if rateLimitedHits > 0 {
+		slog.Warn("sync: rate limited, last_synced_at не сдвигается",
+			"hits", rateLimitedHits)
+		return fmt.Errorf("sync: rate limited (%d запросов 429), повтор на следующем тике", rateLimitedHits)
+	}
+
+	if err := s.store.SetLastSyncedAt(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("sync: set last_synced_at: %w", err)
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("sync: %d ошибок: %s", len(errs), strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// prepareGroups refreshes the group lookup and performs the one-time student back-fill.
+func (s *Service) prepareGroups(ctx context.Context) {
 	// Загружаем справочник групп заранее, чтобы при upsert'е аккаунтов
 	// резолвить group_id → group_name без HTTP-запроса на каждого студента.
 	// Best-effort: при ошибке group_name просто не заполнится в этом
@@ -90,7 +124,10 @@ func (s *Service) Sync(ctx context.Context) error {
 			}
 		}
 	}
+}
 
+// importInitialData imports reference data on the first sync only.
+func (s *Service) importInitialData(ctx context.Context, since time.Time) {
 	// При первом запуске делаем полный импорт справочников.
 	// Каждый этап проверяет наличие данных в БД — если они уже есть,
 	// пропускаем чтобы не тратить rate-limit эмулятора впустую.
@@ -121,21 +158,19 @@ func (s *Service) Sync(ctx context.Context) error {
 			slog.Info("sync: долги уже загружены, пропускаем", "count", n)
 		}
 	}
+}
 
-	// Читаем все страницы изменений.
-	var (
-		allChanges      []emulator.ChangeEntry
-		rateLimitedHits int
-	)
-
+// getChanges reads all pages after since, following the emulator's cursor.
+func (s *Service) getChanges(ctx context.Context, since time.Time) ([]emulator.ChangeEntry, error) {
+	var allChanges []emulator.ChangeEntry
 	currentSince := since
 	for {
 		page, err := s.client.GetChangesPage(ctx, currentSince, changesPageSize)
 		if err != nil {
 			if errors.Is(err, emulator.ErrRateLimited) {
-				return fmt.Errorf("sync: get changes rate limited, повтор на следующем тике")
+				return nil, fmt.Errorf("sync: get changes rate limited, повтор на следующем тике")
 			}
-			return fmt.Errorf("sync: get changes: %w", err)
+			return nil, fmt.Errorf("sync: get changes: %w", err)
 		}
 		allChanges = append(allChanges, page.Entries...)
 		if !page.HasMore {
@@ -149,15 +184,13 @@ func (s *Service) Sync(ctx context.Context) error {
 		}
 		currentSince = nextT
 	}
+	return allChanges, nil
+}
 
-	if len(allChanges) == 0 {
-		slog.Info("sync: нет новых изменений", "since", since)
-		return s.store.SetLastSyncedAt(ctx, time.Now().UTC())
-	}
-
-	slog.Info("sync: получены изменения", "count", len(allChanges), "since", since)
-
+// applyChanges applies each change in order and collects failures and rate limits.
+func (s *Service) applyChanges(ctx context.Context, allChanges []emulator.ChangeEntry) ([]string, int) {
 	var errs []string
+	rateLimitedHits := 0
 	for _, ch := range allChanges {
 		if err := s.applyChange(ctx, ch); err != nil {
 			slog.Warn("sync: ошибка применения изменения",
@@ -171,22 +204,7 @@ func (s *Service) Sync(ctx context.Context) error {
 			}
 		}
 	}
-
-	// Если был rate limit — не двигаем last_synced_at, повторим при следующем тике.
-	if rateLimitedHits > 0 {
-		slog.Warn("sync: rate limited, last_synced_at не сдвигается",
-			"hits", rateLimitedHits)
-		return fmt.Errorf("sync: rate limited (%d запросов 429), повтор на следующем тике", rateLimitedHits)
-	}
-
-	if err := s.store.SetLastSyncedAt(ctx, time.Now().UTC()); err != nil {
-		return fmt.Errorf("sync: set last_synced_at: %w", err)
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("sync: %d ошибок: %s", len(errs), strings.Join(errs, "; "))
-	}
-	return nil
+	return errs, rateLimitedHits
 }
 
 // LastSyncedAt возвращает время последней успешной синхронизации.
