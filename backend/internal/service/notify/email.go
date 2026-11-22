@@ -71,7 +71,12 @@ var tmplTeacherRequestApproved string
 //go:embed templates/teacher_request_rejected.html
 var tmplTeacherRequestRejected string
 
-var emailTemplates map[string]*template.Template
+type emailDefinition struct {
+	subject  string
+	template *template.Template
+}
+
+var emailByKind map[string]emailDefinition
 
 func init() {
 	// parseEmail склеивает base-layout с частным шаблоном: сначала
@@ -81,43 +86,24 @@ func init() {
 	parseEmail := func(content string) *template.Template {
 		return template.Must(template.Must(template.New("email").Parse(tmplBase)).Parse(content))
 	}
-	emailTemplates = map[string]*template.Template{
-		KindRetakeScheduled:                 parseEmail(tmplRetakeScheduled),
-		KindRetakeUpdated:                   parseEmail(tmplRetakeUpdated),
-		KindRetakeCancelled:                 parseEmail(tmplRetakeCancelled),
-		KindRetakeGradeReceived:             parseEmail(tmplRetakeGradeReceived),
-		KindRetakeScheduledTeacher:          parseEmail(tmplRetakeScheduledTeacher),
-		KindRetakeUpdatedTeacher:            parseEmail(tmplRetakeUpdatedTeacher),
-		KindRetakeCancelledTeacher:          parseEmail(tmplRetakeCancelledTeacher),
-		KindRetakeParticipantRemoved:        parseEmail(tmplRetakeParticipantRemoved),
-		KindRetakeParticipantRemovedTeacher: parseEmail(tmplRetakeParticipantRemovedTeacher),
-		KindRetakeChangeApproved:            parseEmail(tmplRetakeChangeApproved),
-		KindRetakeChangeRejected:            parseEmail(tmplRetakeChangeRejected),
-		KindRetakeRequestApproved:           parseEmail(tmplRetakeRequestApproved),
-		KindRetakeRequestRejected:           parseEmail(tmplRetakeRequestRejected),
-		KindDebtCreated:                     parseEmail(tmplDebtCreated),
-		KindTeacherRequestApproved:          parseEmail(tmplTeacherRequestApproved),
-		KindTeacherRequestRejected:          parseEmail(tmplTeacherRequestRejected),
+	emailByKind = map[string]emailDefinition{
+		KindRetakeScheduled:                 {subject: "Назначена пересдача", template: parseEmail(tmplRetakeScheduled)},
+		KindRetakeUpdated:                   {subject: "Пересдача перенесена", template: parseEmail(tmplRetakeUpdated)},
+		KindRetakeCancelled:                 {subject: "Пересдача отменена", template: parseEmail(tmplRetakeCancelled)},
+		KindRetakeGradeReceived:             {subject: "Выставлена оценка за пересдачу", template: parseEmail(tmplRetakeGradeReceived)},
+		KindRetakeScheduledTeacher:          {subject: "Вы назначены на пересдачу", template: parseEmail(tmplRetakeScheduledTeacher)},
+		KindRetakeUpdatedTeacher:            {subject: "Пересдача перенесена", template: parseEmail(tmplRetakeUpdatedTeacher)},
+		KindRetakeCancelledTeacher:          {subject: "Пересдача отменена", template: parseEmail(tmplRetakeCancelledTeacher)},
+		KindRetakeParticipantRemoved:        {subject: "Вы сняты с пересдачи", template: parseEmail(tmplRetakeParticipantRemoved)},
+		KindRetakeParticipantRemovedTeacher: {subject: "Вы сняты с приёма пересдачи", template: parseEmail(tmplRetakeParticipantRemovedTeacher)},
+		KindRetakeChangeApproved:            {subject: "Заявка на перенос одобрена", template: parseEmail(tmplRetakeChangeApproved)},
+		KindRetakeChangeRejected:            {subject: "Заявка на перенос отклонена", template: parseEmail(tmplRetakeChangeRejected)},
+		KindRetakeRequestApproved:           {subject: "Заявка на пересдачу одобрена", template: parseEmail(tmplRetakeRequestApproved)},
+		KindRetakeRequestRejected:           {subject: "Заявка на пересдачу отклонена", template: parseEmail(tmplRetakeRequestRejected)},
+		KindDebtCreated:                     {subject: "Зафиксирована академическая задолженность", template: parseEmail(tmplDebtCreated)},
+		KindTeacherRequestApproved:          {subject: "Заявка на роль преподавателя одобрена", template: parseEmail(tmplTeacherRequestApproved)},
+		KindTeacherRequestRejected:          {subject: "Заявка на роль преподавателя отклонена", template: parseEmail(tmplTeacherRequestRejected)},
 	}
-}
-
-var subjectByKind = map[string]string{
-	KindRetakeScheduled:                 "Назначена пересдача",
-	KindRetakeUpdated:                   "Пересдача перенесена",
-	KindRetakeCancelled:                 "Пересдача отменена",
-	KindRetakeGradeReceived:             "Выставлена оценка за пересдачу",
-	KindRetakeScheduledTeacher:          "Вы назначены на пересдачу",
-	KindRetakeUpdatedTeacher:            "Пересдача перенесена",
-	KindRetakeCancelledTeacher:          "Пересдача отменена",
-	KindRetakeParticipantRemoved:        "Вы сняты с пересдачи",
-	KindRetakeParticipantRemovedTeacher: "Вы сняты с приёма пересдачи",
-	KindRetakeChangeApproved:            "Заявка на перенос одобрена",
-	KindRetakeChangeRejected:            "Заявка на перенос отклонена",
-	KindRetakeRequestApproved:           "Заявка на пересдачу одобрена",
-	KindRetakeRequestRejected:           "Заявка на пересдачу отклонена",
-	KindDebtCreated:                     "Зафиксирована академическая задолженность",
-	KindTeacherRequestApproved:          "Заявка на роль преподавателя одобрена",
-	KindTeacherRequestRejected:          "Заявка на роль преподавателя отклонена",
 }
 
 const emailQueueSize = 100
@@ -180,7 +166,7 @@ func (e *emailNotifier) send(ctx context.Context, ev Event) error {
 		return nil // email не настроен — пропускаем канал
 	}
 
-	tmpl, ok := emailTemplates[ev.Kind]
+	definition, ok := emailByKind[ev.Kind]
 	if !ok {
 		return nil // нет шаблона — этот тип события не требует email
 	}
@@ -191,14 +177,14 @@ func (e *emailNotifier) send(ctx context.Context, ev Event) error {
 	}
 
 	var body bytes.Buffer
-	if err := tmpl.ExecuteTemplate(&body, "base", ev.Payload); err != nil {
+	if err := definition.template.ExecuteTemplate(&body, "base", ev.Payload); err != nil {
 		return fmt.Errorf("email: render %s: %w", ev.Kind, err)
 	}
 
 	m := gomail.NewMessage()
 	m.SetHeader("From", e.cfg.From)
 	m.SetHeader("To", userEmail)
-	m.SetHeader("Subject", subjectByKind[ev.Kind])
+	m.SetHeader("Subject", definition.subject)
 	m.SetBody("text/html", body.String())
 
 	d := gomail.NewDialer(e.cfg.Host, e.cfg.Port, e.cfg.Username, e.cfg.Password)

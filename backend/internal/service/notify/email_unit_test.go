@@ -31,10 +31,12 @@ func TestEmailTemplates_RenderAll(t *testing.T) {
 		"decision_reason":  "согласовано с кафедрой",
 		"notes":            "взять зачётку",
 	}
-	require.NotEmpty(t, emailTemplates)
-	for kind, tmpl := range emailTemplates {
+	require.NotEmpty(t, emailByKind)
+	for kind, definition := range emailByKind {
+		require.NotEmpty(t, definition.subject, "kind=%s должен иметь тему письма", kind)
+		require.NotNil(t, definition.template, "kind=%s должен иметь шаблон", kind)
 		var buf bytes.Buffer
-		err := tmpl.ExecuteTemplate(&buf, "base", payload)
+		err := definition.template.ExecuteTemplate(&buf, "base", payload)
 		require.NoError(t, err, "kind=%s должен рендериться", kind)
 		out := buf.String()
 		require.Contains(t, out, "Академический ассистент", "kind=%s: нет шапки base", kind)
