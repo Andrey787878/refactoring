@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
+	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo/queries"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/service/audit"
 )
@@ -45,7 +46,7 @@ func (s *Service) AttachStudent(ctx context.Context, disciplineID, studentID, ac
 			Source:       source,
 		})
 		if err != nil {
-			if isUniqueViolation(err) {
+			if repo.IsUniqueViolation(err, "") {
 				return ErrAlreadyExists
 			}
 			return fmt.Errorf("attach student: %w", err)

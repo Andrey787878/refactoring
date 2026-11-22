@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
@@ -119,7 +118,7 @@ func (s *Service) addParticipant(ctx context.Context, retake queries.Retake, use
 		}
 		_, err := q.AddParticipant(ctx, params)
 		if err != nil {
-			if isUniqueViolation(err) {
+			if repo.IsUniqueViolation(err, "") {
 				return ErrAlreadyParticipant
 			}
 			return fmt.Errorf("add participant: %w", err)
@@ -241,9 +240,4 @@ func (s *Service) ListParticipants(ctx context.Context, retakeID uuid.UUID) ([]q
 		return nil, fmt.Errorf("list participants: %w", err)
 	}
 	return rows, nil
-}
-
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

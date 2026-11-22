@@ -2,11 +2,9 @@ package discipline
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/pgutil"
 	"github.com/MaximaRasskazov/Academic-debt-system/backend/internal/repo"
@@ -28,7 +26,7 @@ func (s *Service) AttachTeacher(ctx context.Context, disciplineID, teacherID, ac
 			CreatedBy:    pgutil.PgUUID(actorID),
 		})
 		if err != nil {
-			if isUniqueViolation(err) {
+			if repo.IsUniqueViolation(err, "") {
 				return ErrAlreadyExists
 			}
 			if repo.IsForeignKeyViolation(err) {
@@ -101,12 +99,4 @@ func (s *Service) IsTeacherOf(ctx context.Context, teacherID, disciplineID uuid.
 		return false, fmt.Errorf("is teacher: %w", err)
 	}
 	return ok, nil
-}
-
-// isUniqueViolation проверяет, что ошибка от pgx — это нарушение
-// уникального индекса (SQLSTATE 23505). Используется, чтобы переводить
-// её в читаемую sentinel-ошибку.
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
