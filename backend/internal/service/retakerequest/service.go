@@ -222,8 +222,34 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	if req.Status != "pending" {
 		return Request{}, ErrNotPending
 	}
-	p := req.Payload
+	p, minTeachers, err := prepareApproval(req.Payload, selectedSlot)
+	if err != nil {
+		return Request{}, err
+	}
 
+	var approved queries.RetakeRequest
+	var createdRetake queries.Retake
+	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
+		retake, err := createRetakeForApproval(ctx, q, p, minTeachers, actorID)
+		if err != nil {
+			return err
+		}
+		createdRetake = retake
+
+		approved, err = s.approveRequestTx(ctx, q, id, actorID, decisionReason, p, retake)
+		return err
+	})
+	if err != nil {
+		return Request{}, err
+	}
+
+	s.notifyApproval(ctx, req, approved, createdRetake, decisionReason)
+
+	return fromRow(approved)
+}
+
+// prepareApproval resolves the selected slot and validates approval-specific rules.
+func prepareApproval(p Payload, selectedSlot *time.Time) (Payload, int32, error) {
 	// minTeachers по типу пересдачи. Логика дублирует retake.Service.Create —
 	// дублирование сознательное, см. doc пакета.
 	var minTeachers int32
@@ -233,140 +259,138 @@ func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, decisionRe
 	case kindCommission:
 		minTeachers = minCommissionTeachers
 	default:
-		return Request{}, ErrInvalidKind
+		return Payload{}, 0, ErrInvalidKind
 	}
 
-	// Определяем итоговую дату пересдачи из предложенных слотов и выбора декана.
 	scheduledAt, err := resolveScheduledAt(p, selectedSlot)
 	if err != nil {
-		return Request{}, err
+		return Payload{}, 0, err
 	}
 	p.ScheduledAt = scheduledAt
-
-	// Время пересдачи должно быть в будущем на момент одобрения: иначе
-	// созданная пересдача мгновенно уедет в in_progress по шедулеру.
 	if !p.ScheduledAt.After(time.Now()) {
-		return Request{}, ErrScheduledInPast
+		return Payload{}, 0, ErrScheduledInPast
 	}
+	return p, minTeachers, nil
+}
 
-	var approved queries.RetakeRequest
-	var createdRetake queries.Retake
-	err = s.store.RunInTx(ctx, func(q *queries.Queries) error {
-		// 1) Создаём пересдачу.
-		retake, err := q.CreateRetake(ctx, queries.CreateRetakeParams{
-			DisciplineID:    pgutil.PgUUID(p.DisciplineID),
-			Kind:            p.Kind,
-			MinTeachers:     minTeachers,
-			Building:        strings.TrimSpace(p.Building),
-			Room:            strings.TrimSpace(p.Room),
-			ScheduledAt:     pgtype.Timestamptz{Time: p.ScheduledAt, Valid: true},
-			DurationMinutes: p.DurationMinutes,
-			CreatedBy:       pgutil.PgUUID(actorID),
-			Notes:           p.Notes,
-		})
-		if err != nil {
-			return fmt.Errorf("create retake: %w", err)
-		}
-		createdRetake = retake
-
-		// 2) Прикрепляем студентов (kind='student' + debt_id).
-		for _, debtID := range p.StudentDebtIDs {
-			debt, err := q.GetDebtByID(ctx, pgutil.PgUUID(debtID))
-			if err != nil {
-				return fmt.Errorf("get debt %s: %w", debtID, err)
-			}
-			pgDebtID := pgutil.PgUUID(debtID)
-			if _, err := q.AddParticipant(ctx, queries.AddParticipantParams{
-				RetakeID: retake.ID,
-				UserID:   debt.StudentID,
-				Kind:     participantStudent,
-				DebtID:   pgDebtID,
-			}); err != nil {
-				return fmt.Errorf("add student participant: %w", err)
-			}
-		}
-
-		// 3) Прикрепляем преподавателей. Для commission — kind='commission_member',
-		// для regular — 'teacher'. На уровне БД это просто строка в CHECK,
-		// но семантика разная — см. ListTeacherParticipantsForRetake.
-		teacherKind := participantTeacher
-		if p.Kind == kindCommission {
-			teacherKind = participantCommissionMember
-		}
-		for _, tID := range p.TeacherIDs {
-			if _, err := q.AddParticipant(ctx, queries.AddParticipantParams{
-				RetakeID: retake.ID,
-				UserID:   pgutil.PgUUID(tID),
-				Kind:     teacherKind,
-				DebtID:   pgtype.UUID{},
-			}); err != nil {
-				return fmt.Errorf("add teacher participant: %w", err)
-			}
-		}
-
-		// 4) Помечаем заявку approved + записываем created_retake_id.
-		row, err := q.ApproveRetakeRequest(ctx, queries.ApproveRetakeRequestParams{
-			ID:              pgutil.PgUUID(id),
-			ReviewedBy:      pgutil.PgUUID(actorID),
-			DecisionReason:  decisionReason,
-			CreatedRetakeID: retake.ID,
-		})
-		if err != nil {
-			if repo.IsNotFound(err) {
-				return ErrNotPending
-			}
-			return fmt.Errorf("approve: %w", err)
-		}
-		approved = row
-
-		// 5) changelog по созданной пересдаче + audit_log по заявке.
-		if err := s.changelog.LogCreatedTx(ctx, q, "retake", pgutil.UUID(retake.ID).String(),
-			retakeFields(retake), actorID); err != nil {
-			return fmt.Errorf("changelog: %w", err)
-		}
-		return s.audit.LogTx(ctx, q, audit.Event{
-			ActorID:    actorID,
-			Action:     actionApproved,
-			TargetType: entityType,
-			TargetID:   pgutil.UUID(approved.ID).String(),
-			Details: map[string]any{
-				"retake_id":     pgutil.UUID(retake.ID).String(),
-				"discipline_id": p.DisciplineID.String(),
-			},
-		})
+// createRetakeForApproval creates the retake and attaches its requested participants.
+func createRetakeForApproval(ctx context.Context, q *queries.Queries, p Payload, minTeachers int32, actorID uuid.UUID) (queries.Retake, error) {
+	retake, err := q.CreateRetake(ctx, queries.CreateRetakeParams{
+		DisciplineID:    pgutil.PgUUID(p.DisciplineID),
+		Kind:            p.Kind,
+		MinTeachers:     minTeachers,
+		Building:        strings.TrimSpace(p.Building),
+		Room:            strings.TrimSpace(p.Room),
+		ScheduledAt:     pgtype.Timestamptz{Time: p.ScheduledAt, Valid: true},
+		DurationMinutes: p.DurationMinutes,
+		CreatedBy:       pgutil.PgUUID(actorID),
+		Notes:           p.Notes,
 	})
 	if err != nil {
-		return Request{}, err
+		return queries.Retake{}, fmt.Errorf("create retake: %w", err)
 	}
 
-	// Уведомляем подавшего, что заявка одобрена и пересдача создана.
-	// Payload обогащаем деталями созданной пересдачи, чтобы письмо
-	// показывало дисциплину/время/место, а не только id.
-	if s.notify != nil {
-		payload := map[string]any{
-			"retake_request_id": pgutil.UUID(approved.ID).String(),
-			"retake_id":         pgutil.UUID(createdRetake.ID).String(),
-			"scheduled_at":      timeutil.FormatDateTime(createdRetake.ScheduledAt.Time),
-			"building":          createdRetake.Building,
-			"room":              createdRetake.Room,
-			"duration_minutes":  createdRetake.DurationMinutes,
+	if err := addStudentParticipants(ctx, q, retake, p.StudentDebtIDs); err != nil {
+		return queries.Retake{}, err
+	}
+	if err := addTeacherParticipants(ctx, q, retake, p); err != nil {
+		return queries.Retake{}, err
+	}
+	return retake, nil
+}
+
+func addStudentParticipants(ctx context.Context, q *queries.Queries, retake queries.Retake, debtIDs []uuid.UUID) error {
+	for _, debtID := range debtIDs {
+		debt, err := q.GetDebtByID(ctx, pgutil.PgUUID(debtID))
+		if err != nil {
+			return fmt.Errorf("get debt %s: %w", debtID, err)
 		}
-		if disc, err := s.store.GetDisciplineByID(ctx, createdRetake.DisciplineID); err == nil {
-			payload["discipline"] = disc.Name
-		}
-		if decisionReason != nil {
-			payload["decision_reason"] = *decisionReason
-		}
-		if err := s.notify.Notify(ctx, notify.Event{
-			UserID:  req.RequestedBy,
-			Kind:    notify.KindRetakeRequestApproved,
-			Payload: payload,
+		if _, err := q.AddParticipant(ctx, queries.AddParticipantParams{
+			RetakeID: retake.ID,
+			UserID:   debt.StudentID,
+			Kind:     participantStudent,
+			DebtID:   pgutil.PgUUID(debtID),
 		}); err != nil {
-			slog.Warn("retakerequest: уведомление не отправлено", "err", err)
+			return fmt.Errorf("add student participant: %w", err)
 		}
 	}
+	return nil
+}
 
-	return fromRow(approved)
+func addTeacherParticipants(ctx context.Context, q *queries.Queries, retake queries.Retake, p Payload) error {
+	// Для commission используется kind='commission_member', для regular — 'teacher'.
+	teacherKind := participantTeacher
+	if p.Kind == kindCommission {
+		teacherKind = participantCommissionMember
+	}
+	for _, teacherID := range p.TeacherIDs {
+		if _, err := q.AddParticipant(ctx, queries.AddParticipantParams{
+			RetakeID: retake.ID,
+			UserID:   pgutil.PgUUID(teacherID),
+			Kind:     teacherKind,
+			DebtID:   pgtype.UUID{},
+		}); err != nil {
+			return fmt.Errorf("add teacher participant: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) approveRequestTx(ctx context.Context, q *queries.Queries, id, actorID uuid.UUID, decisionReason *string, p Payload, retake queries.Retake) (queries.RetakeRequest, error) {
+	row, err := q.ApproveRetakeRequest(ctx, queries.ApproveRetakeRequestParams{
+		ID:              pgutil.PgUUID(id),
+		ReviewedBy:      pgutil.PgUUID(actorID),
+		DecisionReason:  decisionReason,
+		CreatedRetakeID: retake.ID,
+	})
+	if err != nil {
+		if repo.IsNotFound(err) {
+			return queries.RetakeRequest{}, ErrNotPending
+		}
+		return queries.RetakeRequest{}, fmt.Errorf("approve: %w", err)
+	}
+
+	if err := s.changelog.LogCreatedTx(ctx, q, "retake", pgutil.UUID(retake.ID).String(), retakeFields(retake), actorID); err != nil {
+		return queries.RetakeRequest{}, fmt.Errorf("changelog: %w", err)
+	}
+	err = s.audit.LogTx(ctx, q, audit.Event{
+		ActorID:    actorID,
+		Action:     actionApproved,
+		TargetType: entityType,
+		TargetID:   pgutil.UUID(row.ID).String(),
+		Details: map[string]any{
+			"retake_id":     pgutil.UUID(retake.ID).String(),
+			"discipline_id": p.DisciplineID.String(),
+		},
+	})
+	return row, err
+}
+
+func (s *Service) notifyApproval(ctx context.Context, req Request, approved queries.RetakeRequest, retake queries.Retake, decisionReason *string) {
+	if s.notify == nil {
+		return
+	}
+	payload := map[string]any{
+		"retake_request_id": pgutil.UUID(approved.ID).String(),
+		"retake_id":         pgutil.UUID(retake.ID).String(),
+		"scheduled_at":      timeutil.FormatDateTime(retake.ScheduledAt.Time),
+		"building":          retake.Building,
+		"room":              retake.Room,
+		"duration_minutes":  retake.DurationMinutes,
+	}
+	if disc, err := s.store.GetDisciplineByID(ctx, retake.DisciplineID); err == nil {
+		payload["discipline"] = disc.Name
+	}
+	if decisionReason != nil {
+		payload["decision_reason"] = *decisionReason
+	}
+	if err := s.notify.Notify(ctx, notify.Event{
+		UserID:  req.RequestedBy,
+		Kind:    notify.KindRetakeRequestApproved,
+		Payload: payload,
+	}); err != nil {
+		slog.Warn("retakerequest: уведомление не отправлено", "err", err)
+	}
 }
 
 // Reject отклоняет заявку. decisionReason обязателен.
