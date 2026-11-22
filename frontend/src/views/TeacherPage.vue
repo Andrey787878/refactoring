@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
@@ -13,7 +13,7 @@ import { debtsApi } from '../api/debts'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
 import { directoryApi } from '../api/directory'
-import { notificationsApi } from '../api/notifications'
+import { useNotificationFeed } from '../composables/useNotificationFeed'
 import { notifMeta, notifTitle, notifBody, timeAgo } from '../utils/notifFormat'
 import { exportExcel, exportWord } from '../utils/exportTable'
 import { partsInTZ } from '../utils/datetime'
@@ -21,6 +21,7 @@ import { partsInTZ } from '../utils/datetime'
 const auth = useAuthStore()
 const router = useRouter()
 const sidebarOpen = ref(false)
+const { feed, feedLoading, unreadCount, fetchInitial, applyInitial, markRead, markAllRead } = useNotificationFeed(auth)
 
 function goToRetake(n) {
   const retakeId = n.payload?.retake_id
@@ -133,53 +134,14 @@ function exportDiscs(fmt) {
   fn('Мои предметы', headers, rows, 'predmety')
 }
 
-// ── Feed ──────────────────────────────────────────────────
-const feed        = ref([])
-const feedLoading = ref(true)
-const unreadCount = ref(0)
-
-async function markRead(n) {
-  if (n.read_at) return
-  n.read_at = new Date().toISOString()
-  unreadCount.value = Math.max(0, unreadCount.value - 1)
-  try { await notificationsApi.markRead(n.id) } catch { /* silent */ }
-}
-
-async function markAllRead() {
-  const unread = feed.value.filter(n => !n.read_at)
-  unread.forEach(n => { n.read_at = new Date().toISOString() })
-  unreadCount.value = 0
-  await Promise.allSettled(unread.map(n => notificationsApi.markRead(n.id)))
-}
-
-// ── WebSocket ─────────────────────────────────────────────
-let ws = null
-function connectWS() {
-  if (!auth.token) return
-  try {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    ws = new WebSocket(`${proto}://${location.host}/ws/notifications?token=${auth.token}`)
-    ws.onmessage = (e) => {
-      try {
-        const n = JSON.parse(e.data)
-        feed.value.unshift(n)
-        if (!n.read_at) unreadCount.value++
-      } catch { /* ignore */ }
-    }
-    ws.onerror = () => {}
-  } catch { /* ignore */ }
-}
-
 // ── Load ──────────────────────────────────────────────────
 onMounted(async () => {
-  connectWS()
-
   const [myDiscRes, allDiscRes, debtsRes, retakesRes, notifsRes] = await Promise.allSettled([
     disciplinesApi.myAsTeacher(),
     disciplinesApi.getAll({ limit: 500 }),
     debtsApi.getByDiscipline(),
     retakesApi.getMy(),
-    notificationsApi.getAll({ limit: 30 }),
+    fetchInitial(),
   ])
 
   // Карта всех дисциплин id → name
@@ -227,11 +189,7 @@ onMounted(async () => {
       })
   }
 
-  if (notifsRes.status === 'fulfilled') {
-    feed.value = notifsRes.value.data.items ?? notifsRes.value.data ?? []
-    unreadCount.value = feed.value.filter(n => !n.read_at).length
-  }
-  feedLoading.value = false
+  applyInitial(notifsRes)
 
   stats.value = [
     { key: 'discs',   label: 'Мои предметы',       value: myDiscs.value.length, accent: '#3b3fe0' },
@@ -241,7 +199,6 @@ onMounted(async () => {
   ]
 })
 
-onUnmounted(() => { ws?.close() })
 </script>
 
 <template>
