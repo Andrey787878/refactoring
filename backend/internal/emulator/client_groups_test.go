@@ -28,7 +28,7 @@ func TestClient_ListGroups(t *testing.T) {
 	defer srv.Close()
 
 	c := emulator.New(srv.URL, "test-key")
-	items, meta, err := c.ListGroups(context.Background(), 1, 100)
+	items, meta, err := c.ListGroups(context.Background(), emulator.PageRequest{Page: 1, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 	require.Equal(t, "g1", items[0].ID)
@@ -71,7 +71,7 @@ func TestClient_ListAccounts_ParsesGroupID(t *testing.T) {
 	defer srv.Close()
 
 	c := emulator.New(srv.URL, "test-key")
-	items, _, err := c.ListAccounts(context.Background(), "student", 1, 100)
+	items, _, err := c.ListAccounts(context.Background(), "student", emulator.PageRequest{Page: 1, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, "g2", items[0].GroupID, "group_id должен десериализоваться из аккаунта")

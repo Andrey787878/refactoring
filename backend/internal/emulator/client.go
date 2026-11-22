@@ -165,6 +165,20 @@ type ChangesPage struct {
 	HasMore   bool
 }
 
+// PageRequest задаёт страницу списка в эмуляторе.
+type PageRequest struct {
+	Page  int
+	Limit int
+}
+
+// query returns the pagination parameters for an emulator list request.
+func (request PageRequest) query() url.Values {
+	params := url.Values{}
+	params.Set("page", fmt.Sprintf("%d", request.Page))
+	params.Set("limit", fmt.Sprintf("%d", request.Limit))
+	return params
+}
+
 // GetChangesPage возвращает одну страницу изменений. Используйте NextSince
 // для получения следующей страницы пока HasMore = true.
 func (c *Client) GetChangesPage(ctx context.Context, since time.Time, limit int) (ChangesPage, error) {
@@ -196,13 +210,9 @@ func (c *Client) GetChanges(ctx context.Context, since time.Time, limit int) ([]
 }
 
 // ListDisciplines возвращает все дисциплины из эмулятора постранично.
-func (c *Client) ListDisciplines(ctx context.Context, page, limit int) ([]DisciplineDTO, paginationMeta, error) {
-	params := url.Values{}
-	params.Set("page", fmt.Sprintf("%d", page))
-	params.Set("limit", fmt.Sprintf("%d", limit))
-
+func (c *Client) ListDisciplines(ctx context.Context, page PageRequest) ([]DisciplineDTO, paginationMeta, error) {
 	var resp disciplinesListResponse
-	if err := c.get(ctx, "/api/v1/disciplines?"+params.Encode(), &resp); err != nil {
+	if err := c.get(ctx, "/api/v1/disciplines?"+page.query().Encode(), &resp); err != nil {
 		return nil, paginationMeta{}, fmt.Errorf("list disciplines: %w", err)
 	}
 	return resp.Data, resp.Meta, nil
@@ -218,13 +228,9 @@ func (c *Client) GetDiscipline(ctx context.Context, externalID string) (*Discipl
 }
 
 // ListDebts возвращает долги из эмулятора постранично.
-func (c *Client) ListDebts(ctx context.Context, page, limit int) ([]DebtDTO, paginationMeta, error) {
-	params := url.Values{}
-	params.Set("page", fmt.Sprintf("%d", page))
-	params.Set("limit", fmt.Sprintf("%d", limit))
-
+func (c *Client) ListDebts(ctx context.Context, page PageRequest) ([]DebtDTO, paginationMeta, error) {
 	var resp debtsListResponse
-	if err := c.get(ctx, "/api/v1/debts?"+params.Encode(), &resp); err != nil {
+	if err := c.get(ctx, "/api/v1/debts?"+page.query().Encode(), &resp); err != nil {
 		return nil, paginationMeta{}, fmt.Errorf("list debts: %w", err)
 	}
 	return resp.Data, resp.Meta, nil
@@ -241,10 +247,8 @@ func (c *Client) GetDebt(ctx context.Context, externalID string) (*DebtDTO, erro
 
 // ListAccounts возвращает аккаунты из эмулятора постранично.
 // role: "student" | "teacher" | "" (все роли).
-func (c *Client) ListAccounts(ctx context.Context, role string, page, limit int) ([]AccountDTO, paginationMeta, error) {
-	params := url.Values{}
-	params.Set("page", fmt.Sprintf("%d", page))
-	params.Set("limit", fmt.Sprintf("%d", limit))
+func (c *Client) ListAccounts(ctx context.Context, role string, page PageRequest) ([]AccountDTO, paginationMeta, error) {
+	params := page.query()
 	if role != "" {
 		params.Set("role", role)
 	}
@@ -267,13 +271,9 @@ func (c *Client) GetAccount(ctx context.Context, externalID string) (*AccountDTO
 
 // ListGroups возвращает учебные группы из эмулятора постранично.
 // Используется sync'ом для построения справочника group_id → name.
-func (c *Client) ListGroups(ctx context.Context, page, limit int) ([]GroupDTO, paginationMeta, error) {
-	params := url.Values{}
-	params.Set("page", fmt.Sprintf("%d", page))
-	params.Set("limit", fmt.Sprintf("%d", limit))
-
+func (c *Client) ListGroups(ctx context.Context, page PageRequest) ([]GroupDTO, paginationMeta, error) {
 	var resp groupsListResponse
-	if err := c.get(ctx, "/api/v1/groups?"+params.Encode(), &resp); err != nil {
+	if err := c.get(ctx, "/api/v1/groups?"+page.query().Encode(), &resp); err != nil {
 		return nil, paginationMeta{}, fmt.Errorf("list groups: %w", err)
 	}
 	return resp.Data, resp.Meta, nil

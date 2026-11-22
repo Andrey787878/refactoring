@@ -289,7 +289,7 @@ func (s *Service) importAllDisciplines(ctx context.Context) error {
 	page := 1
 	total := 0
 	for {
-		items, meta, err := s.client.ListDisciplines(ctx, page, pageSize)
+		items, meta, err := s.client.ListDisciplines(ctx, emulator.PageRequest{Page: page, Limit: pageSize})
 		if err != nil {
 			return fmt.Errorf("page %d: %w", page, err)
 		}
@@ -340,7 +340,7 @@ func (s *Service) loadGroups(ctx context.Context) {
 	names := make(map[string]string)
 	page := 1
 	for {
-		items, meta, err := s.client.ListGroups(ctx, page, pageSize)
+		items, meta, err := s.client.ListGroups(ctx, emulator.PageRequest{Page: page, Limit: pageSize})
 		if err != nil {
 			slog.Warn("sync: не удалось загрузить справочник групп, group_name может не заполниться", "err", err)
 			return
@@ -395,7 +395,7 @@ func (s *Service) importAllAccounts(ctx context.Context, role string) error {
 	page := 1
 	total := 0
 	for {
-		items, meta, err := s.client.ListAccounts(ctx, role, page, pageSize)
+		items, meta, err := s.client.ListAccounts(ctx, role, emulator.PageRequest{Page: page, Limit: pageSize})
 		if err != nil {
 			return fmt.Errorf("page %d: %w", page, err)
 		}
@@ -545,7 +545,7 @@ func (s *Service) importAllDebts(ctx context.Context) error {
 	total := 0
 	errCount := 0
 	for {
-		items, meta, err := s.client.ListDebts(ctx, page, pageSize)
+		items, meta, err := s.client.ListDebts(ctx, emulator.PageRequest{Page: page, Limit: pageSize})
 		if err != nil {
 			return fmt.Errorf("page %d: %w", page, err)
 		}
