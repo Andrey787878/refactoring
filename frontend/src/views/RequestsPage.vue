@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import AppHeader from '../components/AppHeader.vue'
 import AppSidebar from '../components/AppSidebar.vue'
 import { changeRequestsApi } from '../api/changeRequests'
-import { teacherRequestsApi } from '../api/teacherRequests'
+import { useTeacherRoleRequests } from '../composables/useTeacherRoleRequests'
 import { retakeRequestsApi } from '../api/retakeRequests'
 import { retakesApi } from '../api/retakes'
 import { disciplinesApi } from '../api/disciplines'
@@ -24,11 +24,6 @@ const activeTab = ref('create')
 const userMap   = ref({})
 const discMap   = ref({})
 const retakeMap = ref({})
-
-// ── Tab 1: teacher-role-requests ──────────────────────────────
-const roleRequests   = ref([])
-const roleLoading    = ref(true)
-const roleErr        = ref('')
 
 // ── Tab 2: retake-change-requests ─────────────────────────────
 const changeRequests = ref([])
@@ -106,25 +101,10 @@ function changeFieldRows(req) {
 }
 
 // ── Counts для badge'ей ───────────────────────────────────────
-const roleCount   = computed(() => roleRequests.value.length)
 const changeCount = computed(() => changeRequests.value.length)
 const createCount = computed(() => createRequests.value.length)
 
 // ── Loaders ───────────────────────────────────────────────────
-async function loadRoleTab() {
-  roleLoading.value = true
-  roleErr.value = ''
-  try {
-    // teacherRequestsApi.listPending() возвращает массив TeacherRequestResponse.
-    const list = await teacherRequestsApi.listPending()
-    roleRequests.value = Array.isArray(list) ? list : (list?.items ?? [])
-  } catch (e) {
-    roleErr.value = e.response?.data?.message || e.response?.data?.error || 'Не удалось загрузить заявки'
-  } finally {
-    roleLoading.value = false
-  }
-}
-
 async function loadChangeTab() {
   changeLoading.value = true
   changeErr.value = ''
@@ -262,15 +242,15 @@ function showToast(text, kind = 'err') {
   toastTimer = setTimeout(() => { toast.value = null }, 4000)
 }
 
-async function approveRole(r) {
-  approving.value = r.id
-  try {
-    await teacherRequestsApi.approve(r.id)
-    roleRequests.value = roleRequests.value.filter((x) => x.id !== r.id)
-  } catch (e) {
-    showToast(e.response?.data?.message || e.response?.data?.error || 'Не удалось одобрить заявку')
-  } finally { approving.value = null }
-}
+const {
+  requests: roleRequests,
+  loading: roleLoading,
+  error: roleErr,
+  load: loadRoleTab,
+  approve: approveRole,
+  reject: rejectRole,
+} = useTeacherRoleRequests({ approving, showToast })
+const roleCount = computed(() => roleRequests.value.length)
 
 // approveChange/approveCreate принимают опциональный selectedSlot (ISO).
 // Если заявка предлагает несколько дат, а слот не выбран — не отправляем
@@ -327,8 +307,7 @@ async function doReject() {
   try {
     const id = rejectModal.value.id
     if (rejectKind.value === 'role') {
-      await teacherRequestsApi.reject(id, reason)
-      roleRequests.value = roleRequests.value.filter((x) => x.id !== id)
+      await rejectRole(id, reason)
     } else if (rejectKind.value === 'create') {
       await retakeRequestsApi.reject(id, reason)
       createRequests.value = createRequests.value.filter((x) => x.id !== id)
